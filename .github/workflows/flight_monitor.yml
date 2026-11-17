@@ -1,0 +1,66 @@
+name: Monitoreo Horario Vuelos BUE -> BAQ
+
+on:
+  schedule:
+    # Se ejecuta cada hora en punto (24/7)
+    - cron: '0 * * * *'
+  workflow_dispatch: # Permite dispararlo manualmente cuando quieras
+
+permissions:
+  contents: write
+
+jobs:
+  check-flights:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ./vuelos-monitor
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: './vuelos-monitor/requirements.txt'
+
+      - name: Instalar dependencias y Playwright
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
+
+      - name: Ejecutar script de monitoreo
+        env:
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL || 'urmandiego@gmail.com' }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST || 'smtp.gmail.com' }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          GDRIVE_FILE_ID: ${{ secrets.GDRIVE_FILE_ID || '1XxKOfrundPS-6D5d73OSK90gXIruaYrp' }}
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          ALERT_THRESHOLD: '1500'
+        run: |
+          python monitor.py
+
+      - name: Guardar cambios del Excel en el repositorio
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add vuelos_bue_barranquilla_nov2026.xlsx
+          if git diff --staged --quiet; then
+            echo "Sin cambios en el Excel."
+          else
+            git commit -m "chore(vuelos): actualización automática de tarifas [skip ci]"
+            git push
+          fi
+
+      - name: Subir Excel como Artefacto de GitHub Actions
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vuelos-excel-actualizado
+          path: ./vuelos-monitor/vuelos_bue_barranquilla_nov2026.xlsx
