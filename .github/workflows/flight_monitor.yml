@@ -3,7 +3,7 @@ name: Monitoreo Horario Vuelos BUE -> BAQ
 on:
   schedule:
     # Se ejecuta cada hora en punto (24/7)
-    - cron: '0 * * * *'
+    - cron: '30 * * * *'
   workflow_dispatch: # Permite dispararlo manualmente cuando quieras
 
 permissions:
