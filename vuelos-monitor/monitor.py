@@ -1,148 +1,86 @@
-import asyncio
-import re
-import smtplib
+import os
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from playwright.async_api import async_playwright
+import openpyxl
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-ALERT_THRESHOLD = 500  # Objetivo: menor a 500 USD
-
-ROUTES = [
-    {
-        "key": "RIO_30_02",
-        "name": "BUE -> RIO (30 Dic - 02 Ene)",
-        "url": "https://www.google.com/travel/flights?q=Flights%20to%20RIO%20from%20BUE%20on%202026-12-30%20through%202027-01-02&curr=USD",
-    },
-    {
-        "key": "RIO_30_03",
-        "name": "BUE -> RIO (30 Dic - 03 Ene)",
-        "url": "https://www.google.com/travel/flights?q=Flights%20to%20RIO%20from%20BUE%20on%202026-12-30%20through%202027-01-03&curr=USD",
-    },
-    {
-        "key": "RIO_31_02",
-        "name": "BUE -> RIO (31 Dic - 02 Ene)",
-        "url": "https://www.google.com/travel/flights?q=Flights%20to%20RIO%20from%20BUE%20on%202026-12-31%20through%202027-01-02&curr=USD",
-    },
-    {
-        "key": "RIO_31_03",
-        "name": "BUE -> RIO (31 Dic - 03 Ene)",
-        "url": "https://www.google.com/travel/flights?q=Flights%20to%20RIO%20from%20BUE%20on%202026-12-31%20through%202027-01-03&curr=USD",
-    },
-    {
-        "key": "IDA_30",
-        "name": "Solo Ida BUE -> RIO (30 Dic)",
-        "url": "https://www.google.com/travel/flights?q=Flights%20to%20RIO%20from%20BUE%20on%202026-12-30&curr=USD",
-    },
-    {
-        "key": "IDA_31",
-        "name": "Solo Ida BUE -> RIO (31 Dic)",
-        "url": "https://www.google.com/travel/flights?q=Flights%20to%20RIO%20from%20BUE%20on%202026-12-31&curr=USD",
-    },
-    {
-        "key": "VTA_02",
-        "name": "Solo Ida RIO -> BUE (02 Ene)",
-        "url": "https://www.google.com/travel/flights?q=Flights%20to%20BUE%20from%20RIO%20on%202027-01-02&curr=USD",
-    },
-    {
-        "key": "VTA_03",
-        "name": "Solo Ida RIO -> BUE (03 Ene)",
-        "url": "https://www.google.com/travel/flights?q=Flights%20to%20BUE%20from%20RIO%20on%202027-01-03&curr=USD",
-    },
-]
+EXCEL_FILE = "vuelos_rio_ano_nuevo_2027.xlsx"
 
 
-async def scrape_single_route(context, route_info):
-  page = await context.new_page()
-  try:
-    await page.goto(
-        route_info["url"], wait_until="domcontentloaded", timeout=35000
+def save_to_excel(prices):
+  now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+  # Si el archivo no existe, lo creamos con encabezados y diseño
+  if not os.path.exists(EXCEL_FILE):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Historial Monitoreo"
+
+    # Título principal
+    ws.merge_cells("A1:I1")
+    ws["A1"] = "Monitoreo Vuelos Río de Janeiro - Año Nuevo 2026/2027"
+    ws["A1"].font = Font(name="Arial", size=14, bold=True, color="FFFFFF")
+    ws["A1"].fill = PatternFill(
+        start_color="1A73E8", end_color="1A73E8", fill_type="solid"
     )
-    await page.wait_for_timeout(2000)
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
 
-    btn = page.get_by_role(
-        "button",
-        name=re.compile(r"Proceed anyway|Continuar|Aceptar|Accept all", re.I),
-    )
-    if await btn.count() > 0:
-      try:
-        await btn.first.click()
-        await page.wait_for_timeout(2000)
-      except Exception:
-        pass
-
-    text = await page.inner_text("body")
-    m = re.search(r"(?:from|desde)\s*(?:USD|US\$|\$)\s*([\d,]+)", text, re.I)
-    if m:
-      val = int(m.group(1).replace(",", ""))
-      await page.close()
-      return val
-
-    matches = [
-        int(x.replace(",", ""))
-        for x in re.findall(r"(?:USD|US\$|\$)\s*([\d,]+)", text)
-        if 50 <= int(x.replace(",", "")) <= 10000
+    headers = [
+        "Fecha y Hora",
+        "30 Dic - 02 Ene (USD)",
+        "30 Dic - 03 Ene (USD)",
+        "31 Dic - 02 Ene (USD)",
+        "31 Dic - 03 Ene (USD)",
+        "Solo Ida 30 Dic",
+        "Solo Ida 31 Dic",
+        "Solo Vuelta 02 Ene",
+        "Solo Vuelta 03 Ene",
     ]
-    await page.close()
-    return min(matches) if matches else "Sin dato"
-  except Exception as e:
-    await page.close()
-    return "Error"
+    ws.append([])  # Fila 2 vacía
+    ws.append(headers)  # Fila 3 encabezados
 
-
-async def main():
-  async with async_playwright() as p:
-    browser = await p.chromium.launch(
-        headless=True,
-        args=[
-            "--no-sandbox",
-            "--disable-blink-features=AutomationControlled",
-        ],
+    # Estilo de encabezados
+    header_fill = PatternFill(
+        start_color="F1F3F4", end_color="F1F3F4", fill_type="solid"
     )
-    context = await browser.new_context(
-        user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            " (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-        ),
-        ignore_https_errors=True,
-    )
+    for col in range(1, len(headers) + 1):
+      cell = ws.cell(row=3, column=col)
+      cell.font = Font(name="Arial", size=10, bold=True)
+      cell.fill = header_fill
+      cell.alignment = Alignment(horizontal="center", vertical="center")
+  else:
+    wb = openpyxl.load_workbook(EXCEL_FILE)
+    ws = wb["Historial Monitoreo"]
 
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando...")
-    alerts = []
-    prices = {}
+  # Fila con los datos del chequeo actual
+  row_data = [
+      now_str,
+      prices.get("RIO_30_02", "Sin dato"),
+      prices.get("RIO_30_03", "Sin dato"),
+      prices.get("RIO_31_02", "Sin dato"),
+      prices.get("RIO_31_03", "Sin dato"),
+      prices.get("IDA_30", "Sin dato"),
+      prices.get("IDA_31", "Sin dato"),
+      prices.get("VTA_02", "Sin dato"),
+      prices.get("VTA_03", "Sin dato"),
+  ]
+  ws.append(row_data)
 
-    for r in ROUTES:
-      price = await scrape_single_route(context, r)
-      prices[r["key"]] = price
-      print(f"  {r['name']}: {price}")
-      if isinstance(price, (int, float)) and price < ALERT_THRESHOLD:
-        alerts.append((r["name"], price))
+  # Resaltar en verde si algún precio es < 500 USD
+  last_row = ws.max_row
+  green_fill = PatternFill(
+      start_color="D4EDDA", end_color="D4EDDA", fill_type="solid"
+  )
+  for col in range(2, len(row_data) + 1):
+    val = ws.cell(row=last_row, column=col).value
+    if isinstance(val, (int, float)) and val < 500:
+      ws.cell(row=last_row, column=col).fill = green_fill
+      ws.cell(row=last_row, column=col).font = Font(bold=True, color="155724")
 
-    # Chequeo de combos Solo Ida + Solo Ida
-    for ida_k, ida_nom in [
-        ("IDA_30", "Ida 30 Dic"),
-        ("IDA_31", "Ida 31 Dic"),
-    ]:
-      for vta_k, vta_nom in [
-          ("VTA_02", "Vuelta 02 Ene"),
-          ("VTA_03", "Vuelta 03 Ene"),
-      ]:
-        if isinstance(prices.get(ida_k), (int, float)) and isinstance(
-            prices.get(vta_k), (int, float)
-        ):
-          combo = prices[ida_k] + prices[vta_k]
-          if combo < ALERT_THRESHOLD:
-            alerts.append(
-                (f"🔥 Combo Desdoblado ({ida_nom} + {vta_nom})", combo)
-            )
+  # Ajuste automático del ancho de columnas
+  for col in ws.columns:
+    max_len = max(len(str(cell.value or "")) for cell in col)
+    col_letter = openpyxl.utils.get_column_letter(col[0].column)
+    ws.column_dimensions[col_letter].width = max(max_len + 3, 14)
 
-    await browser.close()
-
-    if alerts:
-      print(f"\n🚨 ¡ALERTA! Se encontraron {len(alerts)} opciones < US$ 500:")
-      for nom, p_val in alerts:
-        print(f"  👉 {nom}: US$ {p_val}")
-
-
-if __name__ == "__main__":
-  asyncio.run(main())
+  wb.save(EXCEL_FILE)
+  print(f"✅ Excel actualizado localmente en '{EXCEL_FILE}'.")
